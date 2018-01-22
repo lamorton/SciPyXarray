@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from matplotlib.mlab import specgram as mplspec
+from scipy.integrate import cumtrapz as trapezoidalIntegral
+
 pi=np.pi
 ma=np.ma
 
@@ -293,3 +295,184 @@ def svd(signal,sampleDimension,sensorDimension):
                'singularValue':(('singularIndex',),np.array(S))
             }
     return xr.Dataset(data_vars,coordinates)
+    
+    
+###  Newer versions
+
+def xderiv(y,x=None):
+    """
+    Take discrete derivative of y (with respect to x) for an xarray.dataArray.
+    Arguments:
+        y: dataArray to take derivative of
+        x: -if y is 1-D and x is None, use the sole dimension of y.
+           -if y is multidimensional (or if you wish to), you must supply x as: 
+               (A) a string, specifying  the name of a 1-D coordinate of y
+               (B) a 1-D dataArray, whose sole dimension matches one of the
+                   dimensions of y. 
+    Returns:
+       applies numpy.gradient to y along specified axis and divides by gradient
+       of specified x-variable along same axis. The dataArray will have the same shape as y.
+    """
+    if y.ndim>1:#try to infer intended dimension from x, if supplied
+        if x is None:
+            raise Exception("Error: must supply x if y.ndim>1.")
+        if type(x)==str:#assume x refers to variable in y
+            if x in y.dims:
+                axisNumber = y.get_axis_num(x)
+                xcoord=getattr(y,x)
+            elif x in y.coords:
+                xcoord=getattr(y,x)
+                if xcoord.ndim>1:
+                    raise Exception("Error: x=y.%s has %d dimensions. Supplied x-variable must be one-dimensional."%(x,xcoord.ndim))
+                dimension = xcoord.dims[0]#only one dimension by this point
+                axisNumber = y.get_axis_num(dimension)
+        elif type(x)==xr.core.dataarray.DataArray:#try to infer from x
+            if not x.ndim == 1:
+                raise Exception("Error: x must be one-dimensional if it is a dataArray")
+            else:#can infer dimension from x
+                xcoord=x
+                axisNumber=y.get_axis_num(xcoord.dims[0])#this still might fail...
+        else:
+            raise Exception("Unable to infer dimension.")
+    elif y.ndim==1:#infer x if not supplied, or if supplied, check that it is one-dimensional
+        axisNumber=0
+        if x is None:
+            xcoord = y.coords[y.dims[axisNumber]] #y only has one dimension at this point, pick out corresponding coordinate
+        elif type(x)==str:
+            xcoord = getattr(y,x)#it can't be higher-dimensional than y, I'm fairly sure
+        elif type(x)==xr.core.dataarray.DataArray:
+            assert x.dims[0]==y.dims[0], "Error: x and y don't have the same dimension name."
+            xcoord=x 
+        else: #TODO: Could maybe extend this to ndarrays? would require change to
+              #supply the correct coordinates right at tne end
+            raise Exception("Error: type of x must be either string or dataArray.")
+        assert len(xcoord.shape)==1, "Error: x must be 1-D."
+    else:
+        raise Exception("y must have at least one dimension.")
+    #need to do this because of the auto-broadcasting ability in the case that
+    #y is multidimensional but x is only one-dimensional.  However, it can allow
+    #x and y to be outer-producted by mistake if 
+    dy = xr.DataArray(np.gradient(y,axis=axisNumber),coords=y.coords)
+    dx = xr.DataArray(np.gradient(xcoord,axis=0),coords=xcoord.coords)
+    return dy/dx
+
+def xinterp(function,argument,coordinate=None,**kwargs):
+    """
+    xarray wrapper for np.interp.  Exact same functionality & optional argument
+    names.
+    Arguments:
+        function: needs to be a 1-D xarray.DataArray. 
+        argument: either a DataArray or an ndarray.
+        coordinate: string specifying name of coordinate to use as basis to 
+                    interpolate from (ie, argument will need to be in same units)
+                    If unspecified, use coordinate corresponding to sole dimension
+                    of 'function'
+    Returns:
+        DataArray or ndarray with same shape as argument
+    """
+    assert function.ndim==1,"function must be 1-D."
+    if coordinate is None:
+        coordinateName=function.dims[0]
+        coordinateValue=function.coords[coordinateName].data
+    elif type(coordinate)==str:
+        coordinateValue=getattr(function,coordinate).data
+        coordinateName=coordinate
+    else:
+        raise Exception("You must supply a string.")
+    if type(argument)==xr.core.dataarray.DataArray:
+        assert argument.dims[0]==function.dims[0], "If argument is a dataArray, it must have same dimension name as function."
+        argument=argument.data
+    else:
+        argument=np.asanyarray(argument)
+    if len(argument.shape)==0:#handle case where a scalar gets turned into an array: you probably just want a scalar back
+        return np.interp(argument[()],coordinateValue,function.data,**kwargs)
+    newFunction=np.interp(argument,coordinateValue,function.data,**kwargs)
+    if type(argument)== xr.core.dataarray.DataArray:
+        return xr.DataArray(newFunction,coords=argument.coords,name=function.name)
+    else:
+        return newFunction
+
+def xinterpInverse(function,argument,coordinate=None,**kwargs):
+    """
+    xarray wrapper for np.interp.  Exact same functionality & optional argument
+    names.
+    Arguments:
+        function: needs to be a 1-D xarray.DataArray. 
+        argument: either a DataArray or an ndarray, 1-D.
+        coordinate: string specifying name of coordinate to use as basis to 
+                    interpolate from (ie, argument will need to be in same units)
+                    If unspecified, use coordinate corresponding to sole dimension
+                    of 'function'
+    Returns:
+        DataArray with 
+    """
+    assert function.ndim==1,"function must be 1-D."
+    if coordinate is None:
+        coordinateName=function.dims[0]
+        coordinateValue=function.coords[coordinateName].data
+    elif type(coordinate)==str:
+        coordinateValue=getattr(function,coordinate).data
+        coordinateName=coordinate
+    else:
+        raise Exception("You must supply a string.")
+    argumentArray=np.asanyarray(argument)#downcast (or upcast!) to use np.interp       
+    if len(argumentArray.shape)==0:#handle case where a scalar gets turned into an array: you probably just want a scalar back
+        return np.interp(argumentArray[()],function.data,coordinateValue,**kwargs)
+    newFunction=np.interp(argumentArray,function.data,coordinateValue,**kwargs)
+    if type(argument)== xr.core.dataarray.DataArray:
+        return xr.DataArray(newFunction,coords=argument.coords,name=coordinateName)
+    else:
+        return newFunction
+def xintegral(y,x=None,initial=0):
+    """
+    xarray wrapper for scipy.cumtrapz
+    Arguments:
+        y: dataArray to take derivative of
+        x: -if y is 1-D and x is None, use the sole dimension of y.
+           -if y is multidimensional (or if you wish to), you must supply x as: 
+               (A) a string, specifying  the name of a 1-D coordinate of y
+               (B) a 1-D dataArray, whose sole dimension matches one of the
+                   dimensions of y. 
+    Returns:
+       applies scipy.cumtrapz to y along specified axis with x as the
+       independent variable.  The dataArray will have the same shape as y.
+    """
+    assert not initial is None, "Do not set initial to 'None' because this will violate shape constancy of output."
+    if y.ndim>1:#try to infer intended dimension from x, if supplied
+        if x is None:
+            raise Exception("Error: must supply x if y.ndim>1.")
+        if type(x)==str:#assume x refers to variable in y
+            if x in y.dims:
+                axisNumber = y.get_axis_num(x)
+                xcoord=getattr(y,x)
+            elif x in y.coords:
+                xcoord=getattr(y,x)
+                if xcoord.ndim>1:
+                    raise Exception("Error: x=y.%s has %d dimensions. Supplied x-variable must be one-dimensional."%(x,xcoord.ndim))
+                dimension = xcoord.dims[0]#only one dimension by this point
+                axisNumber = y.get_axis_num(dimension)
+        elif type(x)==xr.core.dataarray.DataArray:#try to infer from x
+            if not x.ndim == 1:
+                raise Exception("Error: x must be one-dimensional if it is a dataArray")
+            else:#can infer dimension from x
+                xcoord=x
+                axisNumber=y.get_axis_num(xcoord.dims[0])#this still might fail...
+        else:
+            raise Exception("Unable to infer dimension.")
+    elif y.ndim==1:#infer x if not supplied, or if supplied, check that it is one-dimensional
+        axisNumber=0
+        if x is None:
+            xcoord = y.coords[y.dims[axisNumber]] #y only has one dimension at this point, pick out corresponding coordinate
+        elif type(x)==str:
+            xcoord = getattr(y,x)#it can't be higher-dimensional than y, I'm fairly sure
+        elif type(x)==xr.core.dataarray.DataArray:
+            assert x.dims[0]==y.dims[0], "Error: x and y don't have the same dimension name."
+            xcoord=x 
+        else: #TODO: Could maybe extend this to ndarrays? would require change to
+              #supply the correct coordinates right at tne end
+            raise Exception("Error: type of x must be either string or dataArray.")
+        assert len(xcoord.shape)==1, "Error: x must be 1-D."
+    else:
+        raise Exception("y must have at least one dimension.")
+    return xr.DataArray(trapezoidalIntegral(y,xcoord,axisNumber,initial=initial),coords=y.coords)
+
