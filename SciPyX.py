@@ -476,3 +476,30 @@ def xintegral(y,x=None,initial=0):
         raise Exception("y must have at least one dimension.")
     return xr.DataArray(trapezoidalIntegral(y,xcoord,axisNumber,initial=initial),coords=y.coords)
 
+def recarray2xarray(recarray,dim=None,coords=[]):
+    """
+    Convert a structured numpy array to an xarray dataset.
+    If you know which variable you want to use as your dimension, you can provide
+    the name as the optional argument 'dim', otherwise it will just be 'dim_0'
+    This is useful for the outputs of numpy.genfromtxt and scipy.io.readsav
+    which are in recarrays.
+    """
+    #turn the record array into a dictionary first
+    keylist=recarray.dtype.fields.keys()
+    coord_dict={}
+    dvars={}
+    
+    if dim in keylist: #name the dimension
+        for key in keylist:
+            if key in coords:
+                coord_dict[key]=((dim),recarray[key])
+            else:
+                dvars[key]=((dim),recarray[key])
+                
+    else:#don't name the dimension
+        for key in keylist:
+            if key in coords:
+                coord_dict[key]=recarray[key]
+            else:
+                dvars[key]=recarray[key]
+    return xr.Dataset(data_vars=dvars,coords=coord_dict)
