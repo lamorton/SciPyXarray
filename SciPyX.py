@@ -177,6 +177,11 @@ def spec(data,NFFT=1024,timeName='time',frequencyName='frequency'):
     dims=(frequencyName,timeName)
     return xr.DataArray(variable,coords=coords,dims=dims,name=data.name)
 
+def tupleReplace(tpl,value,index):
+    #utils.tupleReplace(field.data.shape,nfreqs,timeAxisNum)
+    lst = list(tpl)
+    lst[index] = value
+    return tuple(lst)
     
 from matplotlib.pylab import hanning    
 #TODO: figure out how to do the power spectral density normalization  
@@ -200,24 +205,25 @@ def shortTimeFourierTransform(field,timeName,frequencyName,NFFT=2048):
     """
     timeAxisNum=field.get_axis_num(timeName)
     t=getattr(field,timeName).data
-    tstep=NFFT/2
-    ntimes=(len(t)-NFFT)/tstep+1
-    nfreqs=NFFT/2+1
+    tstep=int(NFFT/2)
+    ntimes=int((len(t)-NFFT)/tstep)+1
+    nfreqs=int(NFFT/2)+1
     #need to know shape of array with time dimension removed for setup of fft 
     #output-catching array.  
-    transformedDimensions=utils.tupleReplace(field.data.shape,nfreqs,timeAxisNum)
+    transformedDimensions=tupleReplace(field.data.shape,nfreqs,timeAxisNum)
     overallDimensions=(ntimes,)+transformedDimensions#put new time basis first,
     #leaving frequency where the time dimension was in the original array
     ft=np.empty(overallDimensions,dtype=complex)
     window=hanning(NFFT)
     broadcaster=(1,)*len(transformedDimensions) 
     #put window length where you want window to line up with data array
-    broadcaster=utils.tupleReplace(broadcaster,len(window),timeAxisNum)
+    broadcaster=tupleReplace(broadcaster,len(window),timeAxisNum)
     window=window.reshape(broadcaster)#line up window so it will broadcast right
     #do the short-time Fourier transforms to get the spectrogram
     for i in range(ntimes):
-        selectTimes=utils.slicer(tstep*i,(tstep*i+NFFT),timeAxisNum)
-        ft[i]=np.fft.rfft(field.data[selectTimes]*window,axis=timeAxisNum)
+        selectTimes=slice(tstep*i,(tstep*i+NFFT))
+        darr = field.isel({timeName:selectTimes})
+        ft[i]=np.fft.rfft(darr*window,axis=timeAxisNum)
     #convert from Hz to kHz: 
     timebins=np.linspace(t[0],t[-1],ntimes,endpoint=False)
     fbins=np.fft.rfftfreq(NFFT,t[1]-t[0])          
@@ -228,7 +234,7 @@ def shortTimeFourierTransform(field,timeName,frequencyName,NFFT=2048):
     coords[frequencyName]=fbins*1e-3        
     #set up dims explicitly (dimensional inference is being deprecated)
     olddims=field.dims
-    dims=(timeName,)+utils.tupleReplace(olddims,frequencyName,timeAxisNum)     
+    dims=(timeName,)+tupleReplace(olddims,frequencyName,timeAxisNum)     
     name=field.name 
     return xr.DataArray(ft,coords=coords,dims=dims,name=name)
 
